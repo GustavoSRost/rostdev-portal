@@ -62,4 +62,14 @@ npm run build
 
 O projeto não contém integrações de fontes externas, envio de mensagens, enriquecimento automático ou dependências de IA.
 
+## Prospecção com Google Places API (New)
+
+Na página **Encontrar empresas**, pesquise por texto, categoria e localização (por exemplo, “clínicas odontológicas em Campinas”). A API solicita apenas `id`, nome de exibição, endereço formatado, telefone internacional, site e categoria principal, com até 10 resultados por busca. Cada busca é uma solicitação faturável; consulte preços e cotas no Google Cloud. Não há busca por proximidade porque o app não mantém coordenadas de pesquisa.
+
+Para ativar, habilite **Places API (New)** e o faturamento no projeto Google Cloud e defina `GOOGLE_MAPS_API_KEY` no ambiente do processo da API (ou `GooglePlaces__ApiKey` na configuração .NET). Restrinja a chave à Places API (New) e não a configure no Angular. Sem a credencial a API informa como configurar; erros de cota e chave inválida são apresentados ao usuário sem registrar a chave nem o conteúdo retornado.
+
+Os dados da Places API são exibidos temporariamente para revisão e não são persistidos como lead. A política do Google permite guardar o `place_id` sem limite de retenção; os demais campos não podem ser armazenados de forma permanente neste fluxo. Ao escolher **Revisar e adicionar**, o cadastro fica vazio: informe nome, contato e demais dados obtidos de fonte independente. O `place_id` selecionado é associado ao lead e duplicidades são recusadas. Resultados exibidos levam a atribuição **Google Maps** e não são mantidos após sair da busca/recarregar a página.
+
+Consulte as [políticas e atribuições da Places API](https://developers.google.com/maps/documentation/places/web-service/policies), [Text Search (New)](https://developers.google.com/maps/documentation/places/web-service/text-search) e [preços e campos](https://developers.google.com/maps/documentation/places/web-service/data-fields). O aplicativo precisa também disponibilizar Termos de Uso e Política de Privacidade públicos que incorporem os termos e a política do Google antes de distribuição pública.
+
 # rostdev-portal

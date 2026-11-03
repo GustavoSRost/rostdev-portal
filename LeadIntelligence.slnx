@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="backend/src/LeadIntelligence.Api/LeadIntelligence.Api.csproj" />
+  <Project Path="backend/tests/LeadIntelligence.Api.Tests/LeadIntelligence.Api.Tests.csproj" />
+</Solution>
+
