@@ -1,75 +1,132 @@
 # Lead Intelligence
 
-Aplicação local para organizar negócios potenciais, registrar pesquisa e acompanhar o pipeline de prospecção. A aplicação não envia mensagens. O envio de qualquer contato permanece sob ação explícita do usuário.
+Aplicação full-stack para organizar negócios potenciais, registrar pesquisa e acompanhar o pipeline de prospecção B2B — com busca de empresas via Google Places API (New). **A aplicação nunca envia mensagens**: todo contato permanece sob ação explícita do usuário.
 
-## Stack
+![.NET 10](https://img.shields.io/badge/.NET-10-512BD4) ![Angular 22](https://img.shields.io/badge/Angular-22-DD0031) ![PostgreSQL 17](https://img.shields.io/badge/PostgreSQL-17-336791) ![EF Core 10](https://img.shields.io/badge/EF%20Core-10-512BD4)
 
-- Angular 22 e TypeScript
-- ASP.NET Core / .NET 10
-- PostgreSQL 17 com Docker Compose
-- Entity Framework Core 10
+## Destaques técnicos
 
-## Pré-requisitos
+- **Domínio rico**: `Lead` encapsula estado e invariantes (setters privados, normalização de entrada, máquina de estados em `TryTransitionTo`); transições inválidas retornam `409 Conflict` com `ProblemDetails`.
+- **Ciclo de vida explícito**: 11 status e tabela de transições permitidas, coberta por testes unitários (xUnit) — ex.: não é possível pular de `New` para `Contacted`.
+- **Integração externa com cuidado operacional**: cliente `HttpClient` tipado para Places API (New) com *field mask* mínimo, tratamento diferenciado de 429/403/400/timeout e redação do header `X-Goog-Api-Key` nos logs.
+- **Conformidade com termos de uso**: resultados do Google são exibidos temporariamente e **não persistidos**; apenas o `place_id` (permitido pela política) é guardado, com checagem de duplicidade.
+- **Segurança**: chave de API só no backend, CORS restrito a origens locais, validação de entrada (`DataAnnotations` + atributo customizado `HttpUrl` que restringe a `http`/`https`), `.env` fora do versionamento.
+- **Persistência**: EF Core + Npgsql, migrações aplicadas automaticamente na inicialização, PostgreSQL via Docker Compose com *healthcheck*.
+- **Frontend moderno**: Angular 22 (componentes standalone, roteamento por página), TypeScript, testes com Vitest.
 
-- .NET 10 SDK
-- Node.js 24 ou superior e npm
-- Docker Desktop com Docker Compose
+## Arquitetura
+
+```mermaid
+flowchart LR
+    UI["Angular 22<br/>(localhost:4200)"] -->|REST/JSON| API["ASP.NET Core API<br/>(.NET 10)"]
+    API -->|EF Core / Npgsql| DB[("PostgreSQL 17")]
+    API -->|Text Search (New)| GP["Google Places API"]
+```
+
+```
+backend/
+  src/LeadIntelligence.Api/
+    Controllers/   Leads, Dashboard, Places
+    Domain/        Lead (agregado + máquina de estados), LeadStatus
+    Contracts/     DTOs e validação de entrada
+    Services/      PlacesSearchService (integração Google)
+    Data/          AppDbContext e migrações
+  tests/LeadIntelligence.Api.Tests/   testes de domínio (xUnit)
+frontend/src/app/
+  pages/           dashboard, leads, lead-detail, prospecting
+  lead.service.ts  cliente HTTP tipado (+ spec)
+```
+
+### Ciclo de vida do lead
+
+```mermaid
+stateDiagram-v2
+    [*] --> New
+    New --> Researching
+    Researching --> Qualified
+    Qualified --> ContactReady
+    ContactReady --> Contacted
+    Contacted --> Responded
+    Responded --> Proposal
+    Proposal --> Won
+    Contacted --> Lost
+    Responded --> Lost
+    Proposal --> Lost
+    New --> Disqualified
+    Researching --> Disqualified
+    Qualified --> Disqualified
+    ContactReady --> Disqualified
+    Won --> Archived
+    Lost --> Researching
+    Disqualified --> Researching
+    Archived --> Researching
+```
+
+Retornos intermediários (ex.: `Researching → New`, `Responded → ContactReady`) e arquivamento a partir de qualquer estado também são permitidos; a fonte da verdade é `Domain/Lead.cs`.
+
+## Funcionalidades
+
+- CRUD de leads com busca paginada (nome/descrição); a API também filtra por status, cidade e categoria.
+- Painel com contagens e funil do pipeline (descoberto → qualificado → pronto p/ contato → contatado → respondeu → proposta → ganho).
+- **Encontrar empresas**: busca textual (ex.: “clínicas odontológicas em Campinas”) com até 10 resultados e atribuição **Google Maps**; “Revisar e adicionar” abre o cadastro vazio, preenchido a partir de fonte independente.
+- Interface em português.
+
+## API
+
+| Método | Rota | Descrição |
+|---|---|---|
+| GET | `/api/leads` | Lista paginada (`search`, `status`, `city`, `category`, `page`, `pageSize` ≤ 100) |
+| GET | `/api/leads/{id}` | Detalhe |
+| POST | `/api/leads` | Cria (409 se `place_id` duplicado) |
+| PUT | `/api/leads/{id}` | Atualiza |
+| PATCH | `/api/leads/{id}/status` | Transição de status (409 se inválida) |
+| DELETE | `/api/leads/{id}` | Remove |
+| GET | `/api/dashboard` | Métricas e funil |
+| POST | `/api/places/search` | Busca no Google Places |
+
+OpenAPI em desenvolvimento: `http://localhost:5000/openapi/v1.json`.
 
 ## Executar localmente
 
-Na raiz do projeto, inicie o banco:
+Pré-requisitos: .NET 10 SDK, Node.js 24+, Docker com Compose.
 
-```powershell
-docker compose up -d postgres
+```bash
+docker compose up -d postgres                       # banco em localhost:5433
+dotnet run --project backend/src/LeadIntelligence.Api   # API em :5000 (aplica migrações)
+cd frontend && npm install && npm start             # UI em :4200
 ```
 
-Em um terminal, execute a API. Ela aplica as migrações pendentes ao iniciar:
+Configuração (veja `.env.example`):
 
-```powershell
-dotnet run --project backend/src/LeadIntelligence.Api
-```
+| Variável | Uso |
+|---|---|
+| `POSTGRES_PASSWORD` | Senha do Compose; repasse a mesma à API via `ConnectionStrings__Database` ou `DATABASE_URL` |
+| `GOOGLE_MAPS_API_KEY` / `GooglePlaces__ApiKey` | Habilita a prospecção (opcional) |
 
-A API fica em `http://localhost:5000`; o documento OpenAPI de desenvolvimento fica em `/openapi/v1.json`.
+Sem a chave do Google o restante da aplicação funciona; a busca informa como configurá-la.
 
-Em outro terminal, instale as dependências e inicie o Angular:
+## Testes e build
 
-```powershell
-cd frontend
-npm install
-npm start
-```
-
-Abra `http://localhost:4200`. O PostgreSQL local usa `localhost:5433`, `lead_app` e `lead_intelligence`; a porta do container é 5432. Para mudar a senha, defina `POSTGRES_PASSWORD` antes de iniciar o Compose e passe a mesma senha à API em `ConnectionStrings__Database` ou `DATABASE_URL`.
-
-## Testes e compilação
-
-```powershell
+```bash
 dotnet test LeadIntelligence.slnx
 dotnet build backend/src/LeadIntelligence.Api
-cd frontend
-npm test -- --watch=false
-npm run build
+cd frontend && npm test -- --watch=false && npm run build
 ```
-
-## Fase 1 incluída
-
-- Cadastro, edição, consulta, exclusão e pesquisa paginada de leads.
-- Campos de negócio, origem, contato e localização com validação de entrada.
-- Mudanças de status validadas pelo ciclo de vida do lead.
-- Painel com contagens e funil do pipeline.
-- Migração inicial PostgreSQL aplicada na inicialização da API.
-- Interface de lista, cadastro e detalhes em português.
-
-O projeto não contém integrações de fontes externas, envio de mensagens, enriquecimento automático ou dependências de IA.
 
 ## Prospecção com Google Places API (New)
 
-Na página **Encontrar empresas**, pesquise por texto, categoria e localização (por exemplo, “clínicas odontológicas em Campinas”). A API solicita apenas `id`, nome de exibição, endereço formatado, telefone internacional, site e categoria principal, com até 10 resultados por busca. Cada busca é uma solicitação faturável; consulte preços e cotas no Google Cloud. Não há busca por proximidade porque o app não mantém coordenadas de pesquisa.
+- Habilite **Places API (New)** e faturamento no Google Cloud; restrinja a chave à API. Cada busca é faturável.
+- Campos solicitados: `id`, nome, endereço, telefone internacional, site e categoria principal.
+- Dados do Google não são persistidos como lead; só o `place_id` é associado. Antes de distribuição pública, publique Termos de Uso e Política de Privacidade que incorporem os do Google.
+- Referências: [políticas](https://developers.google.com/maps/documentation/places/web-service/policies), [Text Search (New)](https://developers.google.com/maps/documentation/places/web-service/text-search), [preços e campos](https://developers.google.com/maps/documentation/places/web-service/data-fields).
 
-Para ativar, habilite **Places API (New)** e o faturamento no projeto Google Cloud e defina `GOOGLE_MAPS_API_KEY` no ambiente do processo da API (ou `GooglePlaces__ApiKey` na configuração .NET). Restrinja a chave à Places API (New) e não a configure no Angular. Sem a credencial a API informa como configurar; erros de cota e chave inválida são apresentados ao usuário sem registrar a chave nem o conteúdo retornado.
+## Decisões de design e limitações
 
-Os dados da Places API são exibidos temporariamente para revisão e não são persistidos como lead. A política do Google permite guardar o `place_id` sem limite de retenção; os demais campos não podem ser armazenados de forma permanente neste fluxo. Ao escolher **Revisar e adicionar**, o cadastro fica vazio: informe nome, contato e demais dados obtidos de fonte independente. O `place_id` selecionado é associado ao lead e duplicidades são recusadas. Resultados exibidos levam a atribuição **Google Maps** e não são mantidos após sair da busca/recarregar a página.
+- **Sem envio automático nem enriquecimento por IA**: escopo deliberado, mantém o humano no controle do contato.
+- **Sem autenticação**: pensado para uso local de usuário único; autenticação e multiusuário seriam o próximo passo antes de qualquer deploy público.
+- **Sem busca por proximidade**: o app não mantém coordenadas de pesquisa.
+- **Próximos passos**: testes de integração dos controllers (`WebApplicationFactory`, `Program` já exposto), CI com GitHub Actions, histórico de transições (auditoria) e notas/atividades por lead.
 
-Consulte as [políticas e atribuições da Places API](https://developers.google.com/maps/documentation/places/web-service/policies), [Text Search (New)](https://developers.google.com/maps/documentation/places/web-service/text-search) e [preços e campos](https://developers.google.com/maps/documentation/places/web-service/data-fields). O aplicativo precisa também disponibilizar Termos de Uso e Política de Privacidade públicos que incorporem os termos e a política do Google antes de distribuição pública.
+## Autor
 
-# rostdev-portal
+Gustavo Rost — [github.com/GustavoSRost](https://github.com/GustavoSRost)
